@@ -725,6 +725,16 @@ FlightMap {
 
                     QGCButton {
                         Layout.fillWidth:   true
+                        text:               qsTr("Set init GPS here")
+                        visible:            globals.guidedControllerFlyView.showSetHome
+                        onClicked: {
+                            mapClickDropPanel.close()
+                            globals.guidedControllerFlyView.confirmAction(globals.guidedControllerFlyView.actionSetInitGps, mapClickCoord)
+                        }
+                    }
+
+                    QGCButton {
+                        Layout.fillWidth:   true
                         text:               qsTr("Set Estimator Origin")
                         visible:            globals.guidedControllerFlyView.showSetEstimatorOrigin
                         onClicked: {

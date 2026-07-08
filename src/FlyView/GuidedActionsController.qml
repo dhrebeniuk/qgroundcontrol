@@ -46,6 +46,7 @@ Item {
     readonly property string gotoTitle:                     qsTr("Go To Location")
     readonly property string roiTitle:                      qsTr("ROI")
     readonly property string setHomeTitle:                  qsTr("Set Home")
+    readonly property string setInitGpsTitle:               qsTr("Set Init GPS")
     readonly property string setEstimatorOriginTitle:       qsTr("Set Estimator Origin")
     readonly property string setFlightMode:                 qsTr("Set Flight Mode")
     readonly property string changeHeadingTitle:            qsTr("Change Heading")
@@ -75,6 +76,7 @@ Item {
     readonly property string mvPauseMessage:                    qsTr("Pause selected vehicles at their current position")
     readonly property string roiMessage:                        qsTr("Make the specified location a Region Of Interest")
     readonly property string setHomeMessage:                    qsTr("Set vehicle home as the specified location. This will affect Return to Home position")
+    readonly property string setInitGpsMessage:                 qsTr("Send initial HIL GPS, global origin and home from the specified map location")
     readonly property string setEstimatorOriginMessage:         qsTr("Make the specified location the estimator origin")
     readonly property string setFlightModeMessage:              qsTr("Set the vehicle flight mode to %1").arg(_actionData)
     readonly property string changeHeadingMessage:              qsTr("Set the vehicle heading towards the specified location")
@@ -108,6 +110,7 @@ Item {
     readonly property int actionMVArm:                      28
     readonly property int actionMVDisarm:                   29
     readonly property int actionChangeLoiterRadius:         30
+    readonly property int actionSetInitGps:                 31
 
     readonly property int customActionStart:                10000 // Custom actions ids should start here so that they don't collide with the built in actions
 
@@ -525,6 +528,11 @@ Item {
             confirmDialog.message = setHomeMessage
             confirmDialog.hideTrigger = Qt.binding(function() { return !showSetHome })
             break
+        case actionSetInitGps:
+            confirmDialog.title = setInitGpsTitle
+            confirmDialog.message = setInitGpsMessage
+            confirmDialog.hideTrigger = Qt.binding(function() { return !showSetHome })
+            break
         case actionSetEstimatorOrigin:
             confirmDialog.title = setEstimatorOriginTitle
             confirmDialog.message = setEstimatorOriginMessage
@@ -668,6 +676,9 @@ Item {
             break
         case actionSetHome:
             _activeVehicle.doSetHome(actionData)
+            break
+        case actionSetInitGps:
+            _activeVehicle.setInitGpsFromMap(actionData)
             break
         case actionSetEstimatorOrigin:
             _activeVehicle.setEstimatorOrigin(actionData)

@@ -398,6 +398,9 @@ public:
     /// Set home from flight map coordinate
     Q_INVOKABLE void doSetHome(const QGeoCoordinate& coord);
 
+    /// Send initial HIL GPS/origin/home from flight map coordinate for PX4 use_hil_gps
+    Q_INVOKABLE void setInitGpsFromMap(const QGeoCoordinate& coord);
+
     Q_INVOKABLE QVariant expandedToolbarIndicatorSource(const QString& indicatorName);
 
     bool    isInitialConnectComplete() const;
