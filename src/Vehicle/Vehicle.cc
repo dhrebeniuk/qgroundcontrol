@@ -2937,7 +2937,9 @@ void Vehicle::setInitGpsFromMap(const QGeoCoordinate& coord)
             0,          // vel cm/s
             0, 0, 0,    // vn ve vd cm/s
             65535,      // cog unknown
-            14          // satellites_visible
+            14,         // satellites_visible
+            0,          // id GPS0
+            0           // yaw unavailable
         );
 
         sendMessageOnLinkThreadSafe(sharedLink.get(), gpsMsg);
