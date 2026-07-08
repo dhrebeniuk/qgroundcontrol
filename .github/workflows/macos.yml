@@ -42,6 +42,10 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 120
 
+    env:
+      HAS_MACOS_CERTS: ${{ secrets.MACOS_CERT_P12_BASE64 != '' && secrets.MACOS_CERT_P12_PASSWORD != '' }}
+      HAS_AWS_UPLOAD_SECRETS: ${{ secrets.AWS_ROLE_ARN != '' && secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' && secrets.AWS_DISTRIBUTION_ID != '' }}
+
     # id-token/attestations scoped here: only the attestation upload step needs them.
     permissions:
       contents: read
@@ -86,7 +90,7 @@ jobs:
         with:
           build-dir: ${{ runner.temp }}/build
           build-type: ${{ matrix.build_type }}
-          extra-args: -DQGC_MACOS_SIGN_WITH_IDENTITY=${{ github.event_name != 'pull_request' && 'ON' || 'OFF' }}
+          extra-args: -DQGC_MACOS_SIGN_WITH_IDENTITY=${{ github.event_name != 'pull_request' && env.HAS_MACOS_CERTS == 'true' && 'ON' || 'OFF' }}
 
       - name: Build
         uses: ./.github/actions/cmake-build
@@ -101,7 +105,7 @@ jobs:
           build-dir: ${{ runner.temp }}/build
 
       - name: Import Code Signing Certificate
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && env.HAS_MACOS_CERTS == 'true'
         uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
@@ -134,7 +138,7 @@ jobs:
           binary-path: /Volumes/QGroundControl/QGroundControl.app/Contents/MacOS/QGroundControl
 
       - name: Attest and Upload
-        if: matrix.build_type == 'Release'
+        if: matrix.build_type == 'Release' && env.HAS_AWS_UPLOAD_SECRETS == 'true'
         uses: ./.github/actions/attest-and-upload
         with:
           artifact-name: QGroundControl.dmg
