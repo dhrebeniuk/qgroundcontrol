@@ -137,6 +137,14 @@ jobs:
         with:
           binary-path: /Volumes/QGroundControl/QGroundControl.app/Contents/MacOS/QGroundControl
 
+      - name: Upload DMG Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: QGroundControl-macOS-dmg
+          path: ${{ runner.temp }}/build/QGroundControl.dmg
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Attest and Upload
         if: matrix.build_type == 'Release' && env.HAS_AWS_UPLOAD_SECRETS == 'true'
         uses: ./.github/actions/attest-and-upload
