@@ -2945,7 +2945,7 @@ void Vehicle::setInitGpsFromMap(const QGeoCoordinate& coord)
         sendMessageOnLinkThreadSafe(sharedLink.get(), gpsMsg);
     };
 
-    for (int i = 0; i < 30; i++) {
+    for (int i = 0; i < 1; i++) {
         QTimer::singleShot(i * 100, this, [sendOriginHome, sendHilGps]() {
             sendOriginHome();
             sendHilGps();
