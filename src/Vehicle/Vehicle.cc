@@ -85,6 +85,9 @@
 
 #include <QtCore/QDateTime>
 #include <QtCore/QTimer>
+#include <QtCore/QtMath>
+
+#include <cmath>
 
 QGC_LOGGING_CATEGORY(VehicleLog, "Vehicle.Vehicle")
 
@@ -652,6 +655,9 @@ void Vehicle::_mavlinkMessageReceived(LinkInterface* link, mavlink_message_t mes
     case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
         _handleGlobalPositionInt(message);
         break;
+    case MAVLINK_MSG_ID_LOCAL_POSITION_NED:
+        _handleLocalPositionNedForMap(message);
+        break;
     case MAVLINK_MSG_ID_CAMERA_IMAGE_CAPTURED:
         _handleCameraImageCaptured(message);
         break;
@@ -879,6 +885,55 @@ void Vehicle::_handleGlobalPositionInt(mavlink_message_t& message)
 
     _globalPositionIntMessageAvailable = true;
     QGeoCoordinate newPosition(globalPositionInt.lat  / (double)1E7, globalPositionInt.lon / (double)1E7, globalPositionInt.alt  / 1000.0);
+    if (newPosition != _coordinate) {
+        _coordinate = newPosition;
+        emit coordinateChanged(_coordinate);
+    }
+}
+
+void Vehicle::_handleLocalPositionNedForMap(mavlink_message_t& message)
+{
+    // QGC normally updates the map vehicle coordinate only from
+    // GLOBAL_POSITION_INT/GPS. For VIO-only operation PX4 may have a valid
+    // LOCAL_POSITION_NED while not publishing a global position yet. Use the
+    // map origin selected by the user as a display fallback.
+    if (_globalPositionIntMessageAvailable || !_vioMapOrigin.isValid()) {
+        return;
+    }
+
+    if (message.compid != _defaultComponentId) {
+        return;
+    }
+
+    mavlink_local_position_ned_t localPosition{};
+    mavlink_msg_local_position_ned_decode(&message, &localPosition);
+
+    if (!qIsFinite(localPosition.x) || !qIsFinite(localPosition.y) || !qIsFinite(localPosition.z)) {
+        return;
+    }
+
+    const double horizontalDistance = std::hypot(
+        static_cast<double>(localPosition.x),
+        static_cast<double>(localPosition.y));
+
+    QGeoCoordinate newPosition = _vioMapOrigin;
+    if (horizontalDistance > 0.001) {
+        // LOCAL_POSITION_NED: x=north, y=east. QGeoCoordinate bearing is
+        // clockwise from north, which matches atan2(east, north).
+        double bearing = qRadiansToDegrees(std::atan2(
+            static_cast<double>(localPosition.y),
+            static_cast<double>(localPosition.x)));
+        if (bearing < 0.0) {
+            bearing += 360.0;
+        }
+        newPosition = _vioMapOrigin.atDistanceAndAzimuth(horizontalDistance, bearing);
+    }
+
+    // NED z is positive down: current AMSL = origin AMSL - z.
+    if (!qIsNaN(_vioMapOrigin.altitude())) {
+        newPosition.setAltitude(_vioMapOrigin.altitude() - localPosition.z);
+    }
+
     if (newPosition != _coordinate) {
         _coordinate = newPosition;
         emit coordinateChanged(_coordinate);
@@ -2880,46 +2935,87 @@ void Vehicle::setInitGpsFromMap(const QGeoCoordinate& coord)
         return;
     }
 
-    // A map click normally contains latitude/longitude only. SET_GPS_GLOBAL_ORIGIN
-    // requires an absolute MSL altitude, so use the vehicle's current AMSL value
-    // when available. Falling back to zero is preferable to inventing an altitude:
-    // it preserves the horizontal global mapping and makes the vertical offset explicit.
-    double altMeters = coord.altitude();
+    // The clicked point is interpreted as the CURRENT vehicle position.
+    // SET_GPS_GLOBAL_ORIGIN, however, assigns WGS84 coordinates to local NED
+    // (0, 0, 0). If VIO has already moved away from its zero point, compensate
+    // for the current LOCAL_POSITION_NED x/y offset before sending the origin.
+    const double localNorth = _localPositionFactGroup->x()->rawValue().toDouble();
+    const double localEast  = _localPositionFactGroup->y()->rawValue().toDouble();
+    const double localDown  = _localPositionFactGroup->z()->rawValue().toDouble();
 
-    if (qIsNaN(altMeters)) {
-        altMeters = altitudeAMSL()->rawValue().toDouble();
+    QGeoCoordinate originCoord = coord;
+
+    if (!qIsNaN(localNorth) && !qIsNaN(localEast)) {
+        const double horizontalDistance = std::hypot(localNorth, localEast);
+
+        if (horizontalDistance > 0.001) {
+            // Bearing from the current position back to local NED (0,0).
+            double bearingToOrigin = qRadiansToDegrees(std::atan2(-localEast, -localNorth));
+            if (bearingToOrigin < 0.0) {
+                bearingToOrigin += 360.0;
+            }
+            originCoord = coord.atDistanceAndAzimuth(horizontalDistance, bearingToOrigin);
+        }
     }
 
-    if (qIsNaN(altMeters)) {
+    // A map click normally has no altitude. Prefer current AMSL when available.
+    // For NED, current_alt = origin_alt - z, hence origin_alt = current_alt + z.
+    double currentAmsl = coord.altitude();
+    if (qIsNaN(currentAmsl)) {
+        currentAmsl = altitudeAMSL()->rawValue().toDouble();
+    }
+    if (qIsNaN(currentAmsl)) {
         const QGeoCoordinate currentHome = homePosition();
-        altMeters = currentHome.isValid() && !qIsNaN(currentHome.altitude()) ? currentHome.altitude() : 0.0;
+        currentAmsl = currentHome.isValid() && !qIsNaN(currentHome.altitude())
+            ? currentHome.altitude()
+            : 0.0;
     }
 
-    const QGeoCoordinate originCoord(coord.latitude(), coord.longitude(), altMeters);
+    const double originAmsl = currentAmsl + (!qIsNaN(localDown) ? localDown : 0.0);
+    originCoord.setAltitude(originAmsl);
 
-    // For a VIO/local-position system, set the EKF local-to-global mapping.
-    // Do not inject a one-shot HIL_GPS sample: HIL_GPS is a sensor stream and a
-    // single sample times out, which can make the apparent GPS/global position reset.
-    setEstimatorOrigin(originCoord);
+    // Keep a local QGC fallback as well. ODOMETRY/LOCAL_POSITION_NED does not
+    // directly populate Vehicle::coordinate, so without GLOBAL_POSITION_INT the
+    // map icon would remain hidden even though VIO is valid.
+    _vioMapOrigin = originCoord;
+    QGeoCoordinate currentMapCoordinate = coord;
+    currentMapCoordinate.setAltitude(currentAmsl);
+    if (currentMapCoordinate != _coordinate) {
+        _coordinate = currentMapCoordinate;
+        emit coordinateChanged(_coordinate);
+    }
 
-    // Give PX4 time to apply/publish the new origin before setting Home.
-    QTimer::singleShot(1000, this, [this, originCoord]() {
+    // Send the PX4-supported origin message more than once because it has no ACK.
+    setEstimatorOrigin_SET_GPS_GLOBAL_ORIGIN(originCoord);
+    QTimer::singleShot(250, this, [this, originCoord]() {
+        setEstimatorOrigin_SET_GPS_GLOBAL_ORIGIN(originCoord);
+    });
+    QTimer::singleShot(500, this, [this, originCoord]() {
+        setEstimatorOrigin_SET_GPS_GLOBAL_ORIGIN(originCoord);
+    });
+
+    // Home is separate from EKF origin. Set it to the clicked CURRENT position
+    // after PX4 has had time to publish the new global mapping.
+    QGeoCoordinate homeCoord = coord;
+    homeCoord.setAltitude(currentAmsl);
+    QTimer::singleShot(1200, this, [this, homeCoord]() {
         sendMavCommand(
             defaultComponentId(),
             MAV_CMD_DO_SET_HOME,
             true,
             0.0f, 0.0f, 0.0f, 0.0f,
-            originCoord.latitude(),
-            originCoord.longitude(),
-            originCoord.altitude()
+            homeCoord.latitude(),
+            homeCoord.longitude(),
+            homeCoord.altitude()
         );
     });
 
     QGC::showAppMessage(
-        tr("Initial global origin sent: %1, %2, %3 m AMSL")
-            .arg(originCoord.latitude(), 0, 'f', 7)
-            .arg(originCoord.longitude(), 0, 'f', 7)
-            .arg(originCoord.altitude(), 0, 'f', 1)
+        tr("VIO global origin sent. Current position: %1, %2; local N/E: %3/%4 m")
+            .arg(coord.latitude(), 0, 'f', 7)
+            .arg(coord.longitude(), 0, 'f', 7)
+            .arg(localNorth, 0, 'f', 2)
+            .arg(localEast, 0, 'f', 2)
     );
 }
 
@@ -3200,20 +3296,11 @@ void Vehicle::sendGripperAction(GRIPPER_ACTIONS gripperAction)
 
 void Vehicle::setEstimatorOrigin(const QGeoCoordinate& centerCoord)
 {
-    // Prefer MAV_CMD_DO_SET_GLOBAL_ORIGIN (sent as COMMAND_INT, supersedes SET_GPS_GLOBAL_ORIGIN).
-    sendMavCommandIntWithLambdaFallback(
-        [this, centerCoord]() {  // fallback: deprecated SET_GPS_GLOBAL_ORIGIN message
-            setEstimatorOrigin_SET_GPS_GLOBAL_ORIGIN(centerCoord);
-        },
-        defaultComponentId(),
-        MAV_CMD_DO_SET_GLOBAL_ORIGIN,
-        MAV_FRAME_GLOBAL,
-        false,                                          // showError
-        0.0f, 0.0f, 0.0f, 0.0f,                         // param 1-4 empty
-        centerCoord.latitude(),                         // param5: latitude (deg) -> degE7
-        centerCoord.longitude(),                        // param6: longitude (deg) -> degE7
-        static_cast<float>(centerCoord.altitude())      // param7: altitude (m)
-    );
+    // PX4 currently handles the dedicated SET_GPS_GLOBAL_ORIGIN MAVLink message.
+    // Do not prefer MAV_CMD_DO_SET_GLOBAL_ORIGIN here: support for command 611 is
+    // not reliable across PX4 versions, while message 48 is the documented path
+    // for assigning a global origin to an existing VIO/local-position estimate.
+    setEstimatorOrigin_SET_GPS_GLOBAL_ORIGIN(centerCoord);
 }
 
 void Vehicle::setEstimatorOrigin_SET_GPS_GLOBAL_ORIGIN(const QGeoCoordinate& centerCoord)

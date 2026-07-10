@@ -874,6 +874,7 @@ private:
     void _handleCommandAck              (mavlink_message_t& message);
     void _handleGpsRawInt               (mavlink_message_t& message);
     void _handleGlobalPositionInt       (mavlink_message_t& message);
+    void _handleLocalPositionNedForMap  (mavlink_message_t& message);
     void _handleHighLatency             (mavlink_message_t& message);
     void _handleHighLatency2            (mavlink_message_t& message);
     void _handleOrbitExecutionStatus    (const mavlink_message_t& message);
@@ -951,6 +952,7 @@ private:
     bool            _gpsRawIntMessageAvailable              = false;
     bool            _gps2RawMessageAvailable                = false;
     bool            _globalPositionIntMessageAvailable      = false;
+    QGeoCoordinate  _vioMapOrigin;                           ///< Manual WGS84 origin used to draw VIO-only local position on the map
     bool            _cameraImageCapturedMessageAvailable    = false;
     double          _defaultCruiseSpeed = qQNaN();
     double          _defaultHoverSpeed = qQNaN();
