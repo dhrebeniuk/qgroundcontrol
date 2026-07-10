@@ -76,7 +76,7 @@ Item {
     readonly property string mvPauseMessage:                    qsTr("Pause selected vehicles at their current position")
     readonly property string roiMessage:                        qsTr("Make the specified location a Region Of Interest")
     readonly property string setHomeMessage:                    qsTr("Set vehicle home as the specified location. This will affect Return to Home position")
-    readonly property string setInitGpsMessage:                 qsTr("Send initial HIL GPS, global origin and home from the specified map location")
+    readonly property string setInitGpsMessage:                 qsTr("Set the EKF global origin and Home from the selected map location (for VIO/local-position operation)")
     readonly property string setEstimatorOriginMessage:         qsTr("Make the specified location the estimator origin")
     readonly property string setFlightModeMessage:              qsTr("Set the vehicle flight mode to %1").arg(_actionData)
     readonly property string changeHeadingMessage:              qsTr("Set the vehicle heading towards the specified location")

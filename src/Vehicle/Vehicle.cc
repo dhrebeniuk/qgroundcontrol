@@ -2876,83 +2876,51 @@ void Vehicle::doSetHome(const QGeoCoordinate& coord)
 void Vehicle::setInitGpsFromMap(const QGeoCoordinate& coord)
 {
     if (!coord.isValid()) {
-        QGC::showAppMessage(tr("Init GPS failed: invalid map coordinate"));
+        QGC::showAppMessage(tr("Set initial position failed: invalid map coordinate"));
         return;
     }
 
-    SharedLinkInterfacePtr sharedLink = vehicleLinkManager()->primaryLink().lock();
-    if (!sharedLink) {
-        qCDebug(VehicleLog) << "setInitGpsFromMap: primary link gone!";
-        return;
+    // A map click normally contains latitude/longitude only. SET_GPS_GLOBAL_ORIGIN
+    // requires an absolute MSL altitude, so use the vehicle's current AMSL value
+    // when available. Falling back to zero is preferable to inventing an altitude:
+    // it preserves the horizontal global mapping and makes the vertical offset explicit.
+    double altMeters = coord.altitude();
+
+    if (qIsNaN(altMeters)) {
+        altMeters = altitudeAMSL()->rawValue().toDouble();
     }
 
-    const double altMeters = qIsNaN(coord.altitude()) ? 150.0 : coord.altitude();
-    const int32_t latE7 = static_cast<int32_t>(coord.latitude() * 1e7);
-    const int32_t lonE7 = static_cast<int32_t>(coord.longitude() * 1e7);
-    const int32_t altMm = static_cast<int32_t>(altMeters * 1000.0);
+    if (qIsNaN(altMeters)) {
+        const QGeoCoordinate currentHome = homePosition();
+        altMeters = currentHome.isValid() && !qIsNaN(currentHome.altitude()) ? currentHome.altitude() : 0.0;
+    }
 
-    auto sendOriginHome = [this, sharedLink, latE7, lonE7, altMm, coord, altMeters]() {
-        mavlink_message_t originMsg;
-        mavlink_msg_set_gps_global_origin_pack_chan(
-            MAVLinkProtocol::instance()->getSystemId(),
-            MAVLinkProtocol::getComponentId(),
-            sharedLink->mavlinkChannel(),
-            &originMsg,
-            id(),
-            latE7,
-            lonE7,
-            altMm,
-            static_cast<float>(qQNaN())
-        );
-        sendMessageOnLinkThreadSafe(sharedLink.get(), originMsg);
+    const QGeoCoordinate originCoord(coord.latitude(), coord.longitude(), altMeters);
 
+    // For a VIO/local-position system, set the EKF local-to-global mapping.
+    // Do not inject a one-shot HIL_GPS sample: HIL_GPS is a sensor stream and a
+    // single sample times out, which can make the apparent GPS/global position reset.
+    setEstimatorOrigin(originCoord);
+
+    // Give PX4 time to apply/publish the new origin before setting Home.
+    QTimer::singleShot(1000, this, [this, originCoord]() {
         sendMavCommand(
             defaultComponentId(),
             MAV_CMD_DO_SET_HOME,
-            false,
+            true,
             0.0f, 0.0f, 0.0f, 0.0f,
-            coord.latitude(),
-            coord.longitude(),
-            altMeters
+            originCoord.latitude(),
+            originCoord.longitude(),
+            originCoord.altitude()
         );
-    };
+    });
 
-    auto sendHilGps = [this, sharedLink, latE7, lonE7, altMm]() {
-        mavlink_message_t gpsMsg;
-
-        // PX4 use_hil_gps can require HIL_GPS to come from the autopilot system id.
-        // This matches your Python script source_system=1 when the vehicle id is 1.
-        mavlink_msg_hil_gps_pack_chan(
-            static_cast<uint8_t>(id()),
-            190,
-            sharedLink->mavlinkChannel(),
-            &gpsMsg,
-            static_cast<uint64_t>(QDateTime::currentMSecsSinceEpoch()) * 1000ULL,
-            3,          // fix_type: 3D fix
-            latE7,
-            lonE7,
-            altMm,
-            80,         // eph cm
-            120,        // epv cm
-            0,          // vel cm/s
-            0, 0, 0,    // vn ve vd cm/s
-            65535,      // cog unknown
-            14,         // satellites_visible
-            0,          // id GPS0
-            0           // yaw unavailable
-        );
-
-        sendMessageOnLinkThreadSafe(sharedLink.get(), gpsMsg);
-    };
-
-    for (int i = 0; i < 1; i++) {
-        QTimer::singleShot(i * 100, this, [sendOriginHome, sendHilGps]() {
-            sendOriginHome();
-            sendHilGps();
-        });
-    }
-
-    QGC::showAppMessage(tr("Init GPS sent to vehicle from map coordinate"));
+    QGC::showAppMessage(
+        tr("Initial global origin sent: %1, %2, %3 m AMSL")
+            .arg(originCoord.latitude(), 0, 'f', 7)
+            .arg(originCoord.longitude(), 0, 'f', 7)
+            .arg(originCoord.altitude(), 0, 'f', 1)
+    );
 }
 
 void Vehicle::_handleObstacleDistance(const mavlink_message_t& message)
